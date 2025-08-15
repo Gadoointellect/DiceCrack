@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dice Result Calculator</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="container">
+    <div class="dark-toggle">
+      <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
+    </div>
+
+    <h2>🎲 Dice Result Calculator</h2>
+
+    <label for="hashedSeed">Hashed Server Seed:</label>
+    <input type="text" id="hashedSeed" placeholder="Enter hashed seed..." />
+
+    <label for="clientSeed">Client Seed:</label>
+    <input type="text" id="clientSeed" placeholder="Enter client seed..." />
+
+    <label for="nonce">Nonce:</label>
+    <input type="number" id="nonce" placeholder="Enter nonce..." />
+
+    <label for="wordlist">Upload Wordlist (.txt, .zip, .gz):</label>
+    <input type="file" id="wordlist" accept=".txt,.zip,.gz" />
+
+    <label for="textareaWordlist">Or Paste Wordlist:</label>
+    <textarea id="textareaWordlist" placeholder="one word per line..."></textarea>
+
+    <label for="speedLimit">Max Speed (words/min):</label>
+    <input type="number" id="speedLimit" value="20000" />
+
+    <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="spinner" id="spinner"></div>
+
+    <div class="status" id="statusText"></div>
+
+    <button onclick="startProcessing()">Start</button>
+    <button onclick="pauseProcessing()">Pause</button>
+    <button onclick="resumeProcessing()">Resume</button>
+    <button onclick="exportResult()">Export Result</button>
+
+    <div class="result-box" id="resultBox"></div>
+  </div>
+
+  <script>
+    let jobId = null;
+    let polling = false;
+    let resultData = '';
+
+    function toggleDarkMode() {
+      document.body.classList.toggle('dark');
+    }
+
+    async function startProcessing() {
+      const hashed = document.getElementById('hashedSeed').value.trim();
+      const client = document.getElementById('clientSeed').value.trim();
+      const nonce = document.getElementById('nonce').value.trim();
+      const speed = document.getElementById('speedLimit').value.trim();
+      const textarea = document.getElementById('textareaWordlist').value.trim();
+      const file = document.getElementById('wordlist').files[0];
+
+      if (!hashed || !client || !nonce) {
+        alert("Please fill all required fields.");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("hashedSeed", hashed);
+      formData.append("clientSeed", client);
+      formData.append("nonce", nonce);
+      formData.append("speed", speed);
+
+      if (file) {
+        formData.append("wordlist", file);
+      } else if (textarea) {
+        formData.append("wordlistText", textarea);
+      } else {
+        alert("Please upload or paste a wordlist.");
+        return;
+      }
+
+      document.getElementById("resultBox").textContent = "";
+      document.getElementById("spinner").style.display = "block";
+      document.getElementById("statusText").textContent = "Uploading...";
+      document.getElementById("progressBar").style.width = "0%";
+
+      try {
+        const res = await fetch("/process", { method: "POST", body: formData });
+        const data = await res.json();
+        if (data.job_id) {
+          jobId = data.job_id;
+          polling = true;
+          pollProgress();
+        } else {
+          document.getElementById("statusText").textContent = "Error: No job ID returned.";
+        }
+      } catch (err) {
+        document.getElementById("statusText").textContent = "Failed to start process.";
+        console.error(err);
+      }
+    }
+
+    async function pollProgress() {
+      if (!polling || !jobId) return;
+      try {
+        const res = await fetch(`/progress/${jobId}`);
+        const data = await res.json();
+        const processed = data.processed || 0;
+        const total = data.total || 0;
+        const percent = total > 0 ? Math.floor((processed / total) * 100) : 0;
+        document.getElementById("progressBar").style.width = percent + "%";
+        document.getElementById("statusText").textContent =
+          `Processed ${processed}/${total} (${percent}%)\nSpeed: ${data.speed}/min\nETA: ${data.eta}s`;
+
+        if (data.done) {
+          document.getElementById("spinner").style.display = "none";
+          if (data.match) {
+            resultData = `Unhashed Server Seed: ${data.match}\nRoll: ${data.roll}`;
+            document.getElementById("resultBox").textContent = resultData;
+          } else {
+            document.getElementById("resultBox").textContent = "No match found.";
+          }
+          polling = false;
+        } else {
+          setTimeout(pollProgress, 1500);
+        }
+      } catch (err) {
+        console.error(err);
+        document.getElementById("statusText").textContent = "Polling failed.";
+      }
+    }
+
+    function pauseProcessing() {
+      if (!jobId) return;
+      fetch(`/pause/${jobId}`).catch(console.error);
+      document.getElementById("statusText").textContent = "Paused.";
+    }
+
+    function resumeProcessing() {
+      if (!jobId) return;
+      fetch(`/resume/${jobId}`).then(() => {
+        document.getElementById("statusText").textContent = "Resuming...";
+        pollProgress();
+      }).catch(console.error);
+    }
+
+    function exportResult() {
+      if (!resultData) return;
+      const blob = new Blob([resultData], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "dice_result.txt";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+        </html>
+  
